@@ -1,0 +1,223 @@
+from telethon.sync import TelegramClient
+from telethon.errors import PersistentTimestampOutdatedError, FloodWaitError, RPCError, SessionPasswordNeededError, PhoneNumberInvalidError
+import asyncio
+import time
+import os
+import random
+
+# Настройки
+api_id = 26397630
+api_hash = '179422560c06f011140f784ce3f9e35b'
+phone = '+77782678576'
+
+# список групп, в которые будут отправляться данные
+group_usernames = ['steal_a_brainrota8', 'ishchu_druzeyy', 'goo_vz', 'kukold_tg_chat', 'znakomstva_spb17', 'viirtsexchat', 'tribo529SexxPure',
+                   'virtvz1', 'chatlinsaf', 'exclusivo25', 'DaliOcenitChatiku', 'poisk_virtt', 'znakomstva46738']
+# в перспективе добавить: @druzyab, @nayticc0, @chatikGQ
+message_text = '''
+<b>🏆 Топовый контент популярных блогерш и моделей уже ждет тебя в нашем телеграмм канале 🌶️<a href="https://t.me/+Epvlf_bnOeY1YzMy">SpicyGirls 21+</a>🌶️</b>
+
+<i>🔞 Все самые эксклюзивные видео с Аннфигмой, Coxifoxy, Валей Карнавал, Sweetie Fox и многими другими уже ждут тебя в нашем канале, убедись сам</i>
+
+👉 <b><a href="https://t.me/+Epvlf_bnOeY1YzMy">ПОДПИСАТЬСЯ</a></b> 🔥
+'''
+
+image_path = None
+delay_seconds = int(input("Введите количество секунд между отправками: "))
+
+# Словарь для хранения времени разблокировки чатов
+chat_cooldown = {}
+
+async def create_client():
+    client = TelegramClient('user_session', api_id, api_hash)
+    
+    try:
+        await client.connect()
+        
+        if not await client.is_user_authorized():
+            print("🔐 Отправка запроса на авторизацию...")
+            
+            # Проверяем валидность номера
+            try:
+                await client.send_code_request(phone)
+                print("✅ Код отправлен. Проверьте Telegram") 
+            except PhoneNumberInvalidError:
+                print("❌ Неверный номер телефона")
+                return None
+            
+            code = input('📱 Введите код из Telegram: ').strip()
+            
+            try:
+                await client.sign_in(phone, code)
+                print("✅ Авторизация успешна!")
+            except SessionPasswordNeededError:
+                print("🔒 Требуется пароль двухфакторной аутентификации")
+                password = input('Введите пароль 2FA: ')
+                await client.sign_in(password=password)
+        
+        return client
+        
+    except Exception as e:
+        print(f"❌ Ошибка авторизации: {e}")
+        return None
+
+async def send_to_group(client, group, media=None, max_retries=3):
+    # Проверяем, не в коулдауне ли чат
+    current_time = time.time()
+    if group in chat_cooldown and current_time < chat_cooldown[group]:
+        wait_time = chat_cooldown[group] - current_time
+        print(f"⏳ Чат {group} в коулдауне. Ждем {wait_time:.0f} секунд...")
+        return False
+
+    for attempt in range(max_retries):
+        try:
+            entity = await client.get_entity(group)
+            
+            if media:
+                await client.send_file(
+                    entity,
+                    file=media,
+                    caption=message_text,
+                    parse_mode='html'
+                )
+            else:
+                await client.send_message(entity, message_text, parse_mode='html')
+                
+            print(f"✅ Сообщение в {group} отправлено в {time.strftime('%H:%M:%S')}")
+            
+            # Если отправка успешна, убираем коулдаун если был
+            if group in chat_cooldown:
+                del chat_cooldown[group]
+                
+            return True
+            
+        except FloodWaitError as e:
+            wait_time = e.seconds + 10
+            print(f"⏳ Флуд-контроль в {group}! Ждем {wait_time} сек...")
+            
+            # Устанавливаем коулдаун для этого чата
+            chat_cooldown[group] = current_time + wait_time
+            await asyncio.sleep(wait_time)
+            continue
+            
+        except PersistentTimestampOutdatedError:
+            wait_time = random.randint(10, 30)
+            print(f"⚠️ Ошибка синхронизации в {group}. Попытка {attempt + 1}/{max_retries}. Ждем {wait_time} сек...")
+            await asyncio.sleep(wait_time)
+            
+            await client.disconnect()
+            client = await create_client()
+            if not client:
+                return False
+            continue
+            
+        except RPCError as e:
+            error_msg = str(e)
+            print(f"⚠️ Ошибка RPC в {group}: {error_msg[:100]}...")
+            
+            # Если ошибка связана с долгим ожиданием, ставим коулдаун
+            if "wait of" in error_msg and "seconds is required" in error_msg:
+                try:
+                    # Пытаемся извлечь время ожидания из ошибки
+                    wait_match = error_msg.split("wait of ")[1].split(" seconds")[0]
+                    wait_time = int(float(wait_match)) + 30
+                    chat_cooldown[group] = current_time + wait_time
+                    print(f"🔒 Чат {group} заблокирован на {wait_time} секунд")
+                except:
+                    # Если не удалось извлечь время, ставим стандартный коулдаун
+                    chat_cooldown[group] = current_time + 600  # 10 минут
+                    print(f"🔒 Чат {group} заблокирован на 10 минут")
+            
+            await asyncio.sleep(random.randint(10, 20))
+            return False
+            
+        except Exception as e:
+            error_msg = str(e)
+            print(f"❌ Не удалось отправить в {group}: {error_msg[:100]}...")
+            
+            # Для других ошибок ставим короткий коулдаун
+            chat_cooldown[group] = current_time + 300  # 5 минут
+            await asyncio.sleep(random.randint(5, 10))
+            return False
+    
+    print(f"❌ Превышено количество попыток для {group}")
+    # Ставим коулдаун после исчерпания попыток
+    chat_cooldown[group] = current_time + 600  # 10 минут
+    return False
+
+async def main():
+    # Инициализация медиа
+    media = None
+    if image_path and os.path.exists(image_path):
+        try:
+            client = await create_client()
+            if client:
+                file = await client.upload_file(image_path)
+                media = file
+                await client.disconnect()
+                print("✅ Медиа файл загружен")
+            else:
+                print("❌ Не удалось создать клиент для загрузки медиа")
+        except Exception as upload_error:
+            print(f"⚠️ Не удалось загрузить изображение: {upload_error}")
+
+    while True:
+        start_time = time.time()
+        print(f"\n🚀 Начало рассылки в {time.strftime('%H:%M:%S')}")
+        
+        client = None
+        try:
+            client = await create_client()
+            if not client:
+                print("❌ Не удалось авторизоваться. Повтор через 60 секунд...")
+                await asyncio.sleep(60)
+                continue
+            
+            # Перемешиваем группы для каждого цикла
+            random.shuffle(group_usernames)
+            
+            # Отправляем с задержками между группами
+            successful_sends = 0
+            total_groups = len(group_usernames)
+            
+            for group in group_usernames:
+                success = await send_to_group(client, group, media)
+                
+                if success:
+                    successful_sends += 1
+                
+                # Динамическая задержка между сообщениями
+                delay = random.uniform(3, 10) if success else random.uniform(5, 15)
+                print(f"⏳ Ждем {delay:.1f} сек перед следующим сообщением...")
+                await asyncio.sleep(delay)
+            
+            elapsed = time.time() - start_time
+            print(f"⏱ Отправлено {successful_sends}/{total_groups} сообщений за {elapsed:.2f} секунд")
+            
+            # Показываем чаты в коулдауне
+            if chat_cooldown:
+                print("📋 Чаты в коулдауне:")
+                for chat, unlock_time in chat_cooldown.items():
+                    remaining = unlock_time - time.time()
+                    if remaining > 0:
+                        print(f"   - {chat}: {remaining:.0f} сек")
+            
+            if delay_seconds > elapsed:
+                remaining = delay_seconds - elapsed
+                print(f"💤 Ожидание {remaining:.2f} секунд до следующей рассылки...")
+                await asyncio.sleep(remaining)
+                
+        except Exception as e:
+            print(f"🔥 Критическая ошибка: {e}")
+            await asyncio.sleep(30)
+        finally:
+            if client:
+                await client.disconnect()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nРабота остановлена пользователем")
+    except Exception as e:
+        print(f"Критическая ошибка: {e}")
